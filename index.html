@@ -5,18 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Escáner Inventario</title>
   <style>
-    body{font-family:system-ui,Arial; margin:16px}
+    body{font-family:system-ui,Arial; margin:16px; max-width:720px}
     #video{width:100%; max-width:520px; border:1px solid #ddd; border-radius:12px}
     .row{margin-top:12px}
-    button{padding:12px 14px; font-size:16px}
+    button{padding:12px 14px; font-size:16px; margin-right:8px; margin-top:8px}
     input{padding:10px; font-size:16px; width:100%}
     .ok{color:green} .bad{color:crimson}
     .pill{display:inline-block; padding:6px 10px; background:#f3f3f3; border-radius:999px}
+    .grid{display:grid; grid-template-columns:1fr; gap:8px}
+    table{width:100%; border-collapse:collapse; margin-top:10px}
+    th,td{border-bottom:1px solid #eee; padding:8px; text-align:left; font-size:14px}
+    th{background:#fafafa}
+    .muted{color:#666; font-size:13px}
   </style>
 </head>
 <body>
   <h2>Escáner Inventario — Sucursal 1</h2>
   <p class="pill">Solo escanear · Sin cantidades</p>
+  <p class="muted">Modo actual: <b id="modeLabel">Guardar local</b></p>
 
   <video id="video" playsinline></video>
 
@@ -25,69 +31,145 @@
     <button id="stopBtn" disabled>Detener</button>
   </div>
 
-  <div class="row">
-    <label>Último código:</label>
-    <input id="last" readonly placeholder="Aún no hay escaneos" />
+  <div class="row grid">
+    <div>
+      <label>Último código:</label>
+      <input id="last" readonly placeholder="Aún no hay escaneos" />
+    </div>
+    <div id="status"></div>
   </div>
 
-  <div class="row" id="status"></div>
+  <div class="row">
+    <div class="pill">Escaneos guardados: <b id="count">0</b></div>
+    <button id="exportBtn">Exportar CSV</button>
+    <button id="copyBtn">Copiar últimos 50</button>
+    <button id="clearBtn">Borrar todo</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>#</th><th>Código</th><th>Fecha/Hora</th><th>Ubicación</th></tr>
+    </thead>
+    <tbody id="list"></tbody>
+  </table>
 
   <script type="module">
     import { BrowserMultiFormatReader } from "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm";
 
-    const WEBHOOK_URL = ""; // <-- aquí pegaremos tu webhook de n8n
+    // === CONFIG ===
     const LOCATION = "Sucursal 1";
+    // =================
+
+    const STORAGE_KEY = "inventario_scan_v1";
 
     const video = document.getElementById("video");
     const startBtn = document.getElementById("startBtn");
     const stopBtn  = document.getElementById("stopBtn");
     const last     = document.getElementById("last");
     const statusEl = document.getElementById("status");
+    const listEl   = document.getElementById("list");
+    const countEl  = document.getElementById("count");
+
+    const exportBtn = document.getElementById("exportBtn");
+    const clearBtn  = document.getElementById("clearBtn");
+    const copyBtn   = document.getElementById("copyBtn");
 
     const codeReader = new BrowserMultiFormatReader();
     let controls = null;
-    let lastSent = { code: null, t: 0 };
+    let lastScan = { code: null, t: 0 };
 
     function setStatus(msg, ok=true){
       statusEl.className = ok ? "ok" : "bad";
       statusEl.textContent = msg;
     }
 
-    async function sendToN8n(code){
-      if(!WEBHOOK_URL) throw new Error("Falta pegar WEBHOOK_URL");
-      const body = { barcode: code, location: LOCATION, timestamp: new Date().toISOString() };
+    function loadScans(){
+      try{
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      }catch{
+        return [];
+      }
+    }
+    function saveScans(scans){
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(scans));
+    }
 
-      const res = await fetch(WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
+    function fmtDate(iso){
+      const d = new Date(iso);
+      return d.toLocaleString();
+    }
 
-      if(!res.ok) throw new Error("HTTP " + res.status);
+    function render(){
+      const scans = loadScans();
+      countEl.textContent = scans.length;
+      listEl.innerHTML = scans.slice().reverse().slice(0, 30).map((s, idx) => {
+        const n = scans.length - idx;
+        return `<tr>
+          <td>${n}</td>
+          <td>${escapeHtml(s.barcode)}</td>
+          <td>${escapeHtml(fmtDate(s.timestamp))}</td>
+          <td>${escapeHtml(s.location)}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    function escapeHtml(str){
+      return String(str)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    function addScan(code){
+      const scans = loadScans();
+      const item = { barcode: code, location: LOCATION, timestamp: new Date().toISOString() };
+      scans.push(item);
+      saveScans(scans);
+      render();
+    }
+
+    function toCSV(scans){
+      const header = ["barcode","location","timestamp"];
+      const lines = [header.join(",")];
+      for(const s of scans){
+        const row = [s.barcode, s.location, s.timestamp].map(v => `"${String(v).replaceAll('"','""')}"`);
+        lines.push(row.join(","));
+      }
+      return lines.join("\n");
+    }
+
+    function downloadFile(filename, text){
+      const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     }
 
     startBtn.onclick = async () => {
       try{
         setStatus("Iniciando cámara…");
         controls = await codeReader.decodeFromVideoDevice(undefined, video, async (result) => {
-          if(result){
-            const code = (result.getText() || "").trim();
-            const now = Date.now();
+          if(!result) return;
 
-            if(lastSent.code === code && (now - lastSent.t) < 1200) return;
-            lastSent = { code, t: now };
+          const code = (result.getText() || "").trim();
+          const now = Date.now();
 
-            last.value = code;
-            setStatus("Enviando: " + code);
+          // evita repetir el mismo código por rebote de cámara
+          if(lastScan.code === code && (now - lastScan.t) < 1200) return;
+          lastScan = { code, t: now };
 
-            try{
-              await sendToN8n(code);
-              setStatus("Guardado ✅ (" + code + ")");
-            }catch(e){
-              setStatus("Error al guardar: " + e.message, false);
-            }
-          }
+          last.value = code;
+          addScan(code);
+          setStatus("Guardado local ✅ (" + code + ")");
         });
+
         startBtn.disabled = true;
         stopBtn.disabled = false;
         setStatus("Listo. Escanea un código.");
@@ -102,6 +184,44 @@
       stopBtn.disabled = true;
       setStatus("Cámara detenida.");
     };
+
+    exportBtn.onclick = () => {
+      const scans = loadScans();
+      if(!scans.length){
+        setStatus("No hay nada para exportar.", false);
+        return;
+      }
+      const csv = toCSV(scans);
+      const name = `inventario_${LOCATION.replaceAll(" ","_")}_${new Date().toISOString().slice(0,10)}.csv`;
+      downloadFile(name, csv);
+      setStatus("CSV exportado ✅");
+    };
+
+    copyBtn.onclick = async () => {
+      const scans = loadScans().slice(-50);
+      if(!scans.length){
+        setStatus("No hay nada para copiar.", false);
+        return;
+      }
+      const text = scans.map(s => `${s.barcode}\t${s.location}\t${s.timestamp}`).join("\n");
+      try{
+        await navigator.clipboard.writeText(text);
+        setStatus("Copiado ✅ (últimos 50)");
+      }catch{
+        setStatus("No pude copiar (bloqueo del navegador). Usa Exportar CSV.", false);
+      }
+    };
+
+    clearBtn.onclick = () => {
+      if(!confirm("¿Seguro que quieres borrar TODOS los escaneos guardados en este dispositivo?")) return;
+      saveScans([]);
+      render();
+      setStatus("Lista borrada.");
+    };
+
+    // inicial
+    render();
   </script>
 </body>
 </html>
+
