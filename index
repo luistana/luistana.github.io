@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Escáner Inventario</title>
+  <style>
+    body{font-family:system-ui,Arial; margin:16px}
+    #video{width:100%; max-width:520px; border:1px solid #ddd; border-radius:12px}
+    .row{margin-top:12px}
+    button{padding:12px 14px; font-size:16px}
+    input{padding:10px; font-size:16px; width:100%}
+    .ok{color:green} .bad{color:crimson}
+    .pill{display:inline-block; padding:6px 10px; background:#f3f3f3; border-radius:999px}
+  </style>
+</head>
+<body>
+  <h2>Escáner Inventario — Sucursal 1</h2>
+  <p class="pill">Solo escanear · Sin cantidades</p>
+
+  <video id="video" playsinline></video>
+
+  <div class="row">
+    <button id="startBtn">Iniciar cámara</button>
+    <button id="stopBtn" disabled>Detener</button>
+  </div>
+
+  <div class="row">
+    <label>Último código:</label>
+    <input id="last" readonly placeholder="Aún no hay escaneos" />
+  </div>
+
+  <div class="row" id="status"></div>
+
+  <script type="module">
+    import { BrowserMultiFormatReader } from "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm";
+
+    const WEBHOOK_URL = ""; // <-- aquí pegaremos tu webhook de n8n
+    const LOCATION = "Sucursal 1";
+
+    const video = document.getElementById("video");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn  = document.getElementById("stopBtn");
+    const last     = document.getElementById("last");
+    const statusEl = document.getElementById("status");
+
+    const codeReader = new BrowserMultiFormatReader();
+    let controls = null;
+    let lastSent = { code: null, t: 0 };
+
+    function setStatus(msg, ok=true){
+      statusEl.className = ok ? "ok" : "bad";
+      statusEl.textContent = msg;
+    }
+
+    async function sendToN8n(code){
+      if(!WEBHOOK_URL) throw new Error("Falta pegar WEBHOOK_URL");
+      const body = { barcode: code, location: LOCATION, timestamp: new Date().toISOString() };
+
+      const res = await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+
+      if(!res.ok) throw new Error("HTTP " + res.status);
+    }
+
+    startBtn.onclick = async () => {
+      try{
+        setStatus("Iniciando cámara…");
+        controls = await codeReader.decodeFromVideoDevice(undefined, video, async (result) => {
+          if(result){
+            const code = (result.getText() || "").trim();
+            const now = Date.now();
+
+            if(lastSent.code === code && (now - lastSent.t) < 1200) return;
+            lastSent = { code, t: now };
+
+            last.value = code;
+            setStatus("Enviando: " + code);
+
+            try{
+              await sendToN8n(code);
+              setStatus("Guardado ✅ (" + code + ")");
+            }catch(e){
+              setStatus("Error al guardar: " + e.message, false);
+            }
+          }
+        });
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        setStatus("Listo. Escanea un código.");
+      }catch(e){
+        setStatus("No se pudo abrir la cámara: " + e.message, false);
+      }
+    };
+
+    stopBtn.onclick = () => {
+      try{ controls?.stop(); }catch{}
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus("Cámara detenida.");
+    };
+  </script>
+</body>
+</html>
