@@ -17,6 +17,8 @@
     th,td{border-bottom:1px solid #eee; padding:8px; text-align:left; font-size:14px}
     th{background:#fafafa}
     .muted{color:#666; font-size:13px}
+    .toggles{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px}
+    .toggles label{display:flex; gap:6px; align-items:center; user-select:none}
   </style>
 </head>
 <body>
@@ -31,16 +33,22 @@
     <button id="stopBtn" disabled>Detener</button>
   </div>
 
+  <div class="row toggles">
+    <label><input type="checkbox" id="soundOn" checked> Sonido</label>
+    <label><input type="checkbox" id="vibrateOn" checked> Vibración</label>
+    <label><input type="checkbox" id="flashOn" checked> Flash</label>
+  </div>
+
   <div class="row grid">
     <div>
       <label>Último código:</label>
       <input id="last" readonly placeholder="Aún no hay escaneos" />
     </div>
-    <div id="status"></div>
+    <div class="muted">Escaneos guardados: <b id="count">0</b></div>
+    <div class="row" id="status"></div>
   </div>
 
   <div class="row">
-    <div class="pill">Escaneos guardados: <b id="count">0</b></div>
     <button id="exportBtn">Exportar CSV</button>
     <button id="copyBtn">Copiar últimos 50</button>
     <button id="clearBtn">Borrar todo</button>
@@ -74,6 +82,10 @@
     const clearBtn  = document.getElementById("clearBtn");
     const copyBtn   = document.getElementById("copyBtn");
 
+    const soundOn  = document.getElementById("soundOn");
+    const vibrateOn= document.getElementById("vibrateOn");
+    const flashOn  = document.getElementById("flashOn");
+
     const codeReader = new BrowserMultiFormatReader();
     let controls = null;
     let lastScan = { code: null, t: 0 };
@@ -83,12 +95,41 @@
       statusEl.textContent = msg;
     }
 
-    function loadScans(){
+    // ===== Feedback (beep / vibrate / flash) =====
+    let audioCtx = null;
+    function beep(){
+      if(!soundOn.checked) return;
       try{
-        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-      }catch{
-        return [];
-      }
+        if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = "square";
+        o.frequency.value = 880;
+        g.gain.value = 0.06;
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start();
+        setTimeout(() => o.stop(), 90);
+      }catch{}
+    }
+
+    function vibrate(){
+      if(!vibrateOn.checked) return;
+      try{
+        if(navigator.vibrate) navigator.vibrate(120);
+      }catch{}
+    }
+
+    function flashOK(){
+      if(!flashOn.checked) return;
+      const prev = document.body.style.backgroundColor;
+      document.body.style.backgroundColor = "#d1fae5";
+      setTimeout(() => { document.body.style.backgroundColor = prev; }, 120);
+    }
+    // ============================================
+
+    function loadScans(){
+      try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+      catch{ return []; }
     }
     function saveScans(scans){
       localStorage.setItem(STORAGE_KEY, JSON.stringify(scans));
@@ -97,6 +138,15 @@
     function fmtDate(iso){
       const d = new Date(iso);
       return d.toLocaleString();
+    }
+
+    function escapeHtml(str){
+      return String(str)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
     }
 
     function render(){
@@ -111,15 +161,6 @@
           <td>${escapeHtml(s.location)}</td>
         </tr>`;
       }).join("");
-    }
-
-    function escapeHtml(str){
-      return String(str)
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
     }
 
     function addScan(code){
@@ -152,8 +193,17 @@
       URL.revokeObjectURL(url);
     }
 
+    // ===== Main =====
     startBtn.onclick = async () => {
       try{
+        // En iPhone, el audio requiere interacción del usuario: esto ayuda
+        if(soundOn.checked){
+          try{
+            audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+            await audioCtx.resume?.();
+          }catch{}
+        }
+
         setStatus("Iniciando cámara…");
         controls = await codeReader.decodeFromVideoDevice(undefined, video, async (result) => {
           if(!result) return;
@@ -161,13 +211,19 @@
           const code = (result.getText() || "").trim();
           const now = Date.now();
 
-          // evita repetir el mismo código por rebote de cámara
+          // anti-rebote (no repetir el mismo código en <1.2s)
           if(lastScan.code === code && (now - lastScan.t) < 1200) return;
           lastScan = { code, t: now };
 
           last.value = code;
           addScan(code);
-          setStatus("Guardado local ✅ (" + code + ")");
+
+          // feedback
+          beep();
+          vibrate();
+          flashOK();
+
+          setStatus("Guardado ✅ (" + code + ")");
         });
 
         startBtn.disabled = true;
@@ -219,7 +275,6 @@
       setStatus("Lista borrada.");
     };
 
-    // inicial
     render();
   </script>
 </body>
