@@ -3,28 +3,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Escáner Inventario</title>
+  <title>Escáner Conteo Inventario</title>
   <style>
-    body{font-family:system-ui,Arial; margin:16px; max-width:720px}
+    body{font-family:system-ui,Arial; margin:16px; max-width:920px}
     #video{width:100%; max-width:520px; border:1px solid #ddd; border-radius:12px}
     .row{margin-top:12px}
     button{padding:12px 14px; font-size:16px; margin-right:8px; margin-top:8px}
     input{padding:10px; font-size:16px; width:100%}
     .ok{color:green} .bad{color:crimson}
     .pill{display:inline-block; padding:6px 10px; background:#f3f3f3; border-radius:999px}
+    .muted{color:#666; font-size:13px}
     .grid{display:grid; grid-template-columns:1fr; gap:8px}
+    .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin-top:10px}
+    .card{border:1px solid #eee; border-radius:12px; padding:10px; background:#fff}
+    .toggles{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px}
+    .toggles label{display:flex; gap:6px; align-items:center; user-select:none}
     table{width:100%; border-collapse:collapse; margin-top:10px}
     th,td{border-bottom:1px solid #eee; padding:8px; text-align:left; font-size:14px}
     th{background:#fafafa}
-    .muted{color:#666; font-size:13px}
-    .toggles{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px}
-    .toggles label{display:flex; gap:6px; align-items:center; user-select:none}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+    .small{font-size:12px}
   </style>
 </head>
 <body>
-  <h2>Escáner Inventario — Sucursal 1</h2>
-  <p class="pill">Solo escanear · Sin cantidades</p>
-  <p class="muted">Modo actual: <b id="modeLabel">Guardar local</b></p>
+  <h2>Conteo físico — Escáner (Sucursal 1)</h2>
+  <p class="pill">Solo escanear · Suma automática por código</p>
+  <p class="muted">Consejo: escanea rápido, el sistema suma solo. Si te equivocas, usa “Restar 1” al último código.</p>
 
   <video id="video" playsinline></video>
 
@@ -43,22 +47,47 @@
     <div>
       <label>Último código:</label>
       <input id="last" readonly placeholder="Aún no hay escaneos" />
+      <div class="row">
+        <button id="minusLastBtn">Restar 1 al último</button>
+        <button id="undoBtn">Deshacer último escaneo</button>
+      </div>
+      <div class="muted small">“Restar 1” baja el total de ese código. “Deshacer” elimina el último movimiento.</div>
     </div>
-    <div class="muted">Escaneos guardados: <b id="count">0</b></div>
-    <div class="row" id="status"></div>
+    <div id="status"></div>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="muted">Movimientos (escaneos)</div>
+      <div style="font-size:28px; font-weight:700" id="movesCount">0</div>
+    </div>
+    <div class="card">
+      <div class="muted">Códigos únicos</div>
+      <div style="font-size:28px; font-weight:700" id="uniqueCount">0</div>
+    </div>
   </div>
 
   <div class="row">
-    <button id="exportBtn">Exportar CSV</button>
-    <button id="copyBtn">Copiar últimos 50</button>
+    <button id="exportTotalsBtn">Exportar CSV (Totales)</button>
+    <button id="exportMovesBtn">Exportar CSV (Movimientos)</button>
+    <button id="copyTotalsBtn">Copiar Totales</button>
     <button id="clearBtn">Borrar todo</button>
   </div>
 
+  <h3>Totales por código</h3>
+  <table>
+    <thead>
+      <tr><th>Código</th><th>Cantidad</th><th>Acción rápida</th></tr>
+    </thead>
+    <tbody id="totalsTable"></tbody>
+  </table>
+
+  <h3 style="margin-top:18px">Últimos movimientos (últimos 30)</h3>
   <table>
     <thead>
       <tr><th>#</th><th>Código</th><th>Fecha/Hora</th><th>Ubicación</th></tr>
     </thead>
-    <tbody id="list"></tbody>
+    <tbody id="movesTable"></tbody>
   </table>
 
   <script type="module">
@@ -68,23 +97,32 @@
     const LOCATION = "Sucursal 1";
     // =================
 
-    const STORAGE_KEY = "inventario_scan_v1";
+    const STORAGE_MOVES = "inventario_moves_v2";   // lista de movimientos
+    const STORAGE_TOTALS= "inventario_totals_v2";  // mapa de totales por código
 
     const video = document.getElementById("video");
     const startBtn = document.getElementById("startBtn");
     const stopBtn  = document.getElementById("stopBtn");
     const last     = document.getElementById("last");
     const statusEl = document.getElementById("status");
-    const listEl   = document.getElementById("list");
-    const countEl  = document.getElementById("count");
 
-    const exportBtn = document.getElementById("exportBtn");
-    const clearBtn  = document.getElementById("clearBtn");
-    const copyBtn   = document.getElementById("copyBtn");
+    const movesCountEl  = document.getElementById("movesCount");
+    const uniqueCountEl = document.getElementById("uniqueCount");
 
-    const soundOn  = document.getElementById("soundOn");
-    const vibrateOn= document.getElementById("vibrateOn");
-    const flashOn  = document.getElementById("flashOn");
+    const totalsTableEl = document.getElementById("totalsTable");
+    const movesTableEl  = document.getElementById("movesTable");
+
+    const exportTotalsBtn = document.getElementById("exportTotalsBtn");
+    const exportMovesBtn  = document.getElementById("exportMovesBtn");
+    const copyTotalsBtn   = document.getElementById("copyTotalsBtn");
+    const clearBtn        = document.getElementById("clearBtn");
+
+    const minusLastBtn = document.getElementById("minusLastBtn");
+    const undoBtn      = document.getElementById("undoBtn");
+
+    const soundOn   = document.getElementById("soundOn");
+    const vibrateOn = document.getElementById("vibrateOn");
+    const flashOn   = document.getElementById("flashOn");
 
     const codeReader = new BrowserMultiFormatReader();
     let controls = null;
@@ -111,14 +149,10 @@
         setTimeout(() => o.stop(), 90);
       }catch{}
     }
-
     function vibrate(){
       if(!vibrateOn.checked) return;
-      try{
-        if(navigator.vibrate) navigator.vibrate(120);
-      }catch{}
+      try{ if(navigator.vibrate) navigator.vibrate(120); }catch{}
     }
-
     function flashOK(){
       if(!flashOn.checked) return;
       const prev = document.body.style.backgroundColor;
@@ -127,56 +161,129 @@
     }
     // ============================================
 
-    function loadScans(){
-      try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+    // ===== Storage helpers =====
+    function loadMoves(){
+      try{ return JSON.parse(localStorage.getItem(STORAGE_MOVES) || "[]"); }
       catch{ return []; }
     }
-    function saveScans(scans){
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(scans));
-    }
+    function saveMoves(m){ localStorage.setItem(STORAGE_MOVES, JSON.stringify(m)); }
 
-    function fmtDate(iso){
-      const d = new Date(iso);
-      return d.toLocaleString();
+    function loadTotals(){
+      try{ return JSON.parse(localStorage.getItem(STORAGE_TOTALS) || "{}"); }
+      catch{ return {}; }
     }
+    function saveTotals(t){ localStorage.setItem(STORAGE_TOTALS, JSON.stringify(t)); }
+    // ===========================
 
-    function escapeHtml(str){
+    function fmtDate(iso){ return new Date(iso).toLocaleString(); }
+
+    function esc(str){
       return String(str)
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
+        .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;").replaceAll("'","&#039;");
     }
 
-    function render(){
-      const scans = loadScans();
-      countEl.textContent = scans.length;
-      listEl.innerHTML = scans.slice().reverse().slice(0, 30).map((s, idx) => {
-        const n = scans.length - idx;
-        return `<tr>
-          <td>${n}</td>
-          <td>${escapeHtml(s.barcode)}</td>
-          <td>${escapeHtml(fmtDate(s.timestamp))}</td>
-          <td>${escapeHtml(s.location)}</td>
-        </tr>`;
-      }).join("");
+    function addMove(code){
+      const moves = loadMoves();
+      moves.push({ barcode: code, location: LOCATION, timestamp: new Date().toISOString() });
+      saveMoves(moves);
+    }
+
+    function incTotal(code, delta){
+      const totals = loadTotals();
+      const cur = Number(totals[code] || 0);
+      const next = cur + delta;
+      if(next <= 0){
+        delete totals[code];
+      }else{
+        totals[code] = next;
+      }
+      saveTotals(totals);
+      return next;
     }
 
     function addScan(code){
-      const scans = loadScans();
-      const item = { barcode: code, location: LOCATION, timestamp: new Date().toISOString() };
-      scans.push(item);
-      saveScans(scans);
-      render();
+      addMove(code);
+      const newQty = incTotal(code, +1);
+      return newQty;
     }
 
-    function toCSV(scans){
-      const header = ["barcode","location","timestamp"];
-      const lines = [header.join(",")];
-      for(const s of scans){
-        const row = [s.barcode, s.location, s.timestamp].map(v => `"${String(v).replaceAll('"','""')}"`);
-        lines.push(row.join(","));
+    function undoLastMove(){
+      const moves = loadMoves();
+      if(!moves.length) return null;
+      const lastMove = moves.pop();
+      saveMoves(moves);
+      // revert total
+      const qty = incTotal(lastMove.barcode, -1);
+      return { barcode: lastMove.barcode, qty };
+    }
+
+    function minusLast(){
+      const code = last.value?.trim();
+      if(!code) return null;
+      const qty = incTotal(code, -1);
+      // también registramos el movimiento como “ajuste” para auditoría
+      const moves = loadMoves();
+      moves.push({ barcode: code, location: LOCATION, timestamp: new Date().toISOString(), note: "AJUSTE -1" });
+      saveMoves(moves);
+      return { barcode: code, qty };
+    }
+
+    function render(){
+      const moves = loadMoves();
+      const totals = loadTotals();
+
+      movesCountEl.textContent = moves.length;
+      uniqueCountEl.textContent = Object.keys(totals).length;
+
+      // Totales: ordenados por cantidad desc, luego código
+      const rows = Object.entries(totals)
+        .sort((a,b) => (b[1]-a[1]) || a[0].localeCompare(b[0]))
+        .map(([code, qty]) => `
+          <tr>
+            <td class="mono">${esc(code)}</td>
+            <td><b>${qty}</b></td>
+            <td>
+              <button data-minus="${esc(code)}">-1</button>
+              <button data-plus="${esc(code)}">+1</button>
+            </td>
+          </tr>
+        `).join("");
+      totalsTableEl.innerHTML = rows || `<tr><td colspan="3" class="muted">Aún no hay totales.</td></tr>`;
+
+      // Últimos 30 movimientos
+      const last30 = moves.slice().reverse().slice(0, 30);
+      movesTableEl.innerHTML = last30.map((m, idx) => {
+        const n = moves.length - idx;
+        return `
+          <tr>
+            <td>${n}</td>
+            <td class="mono">${esc(m.barcode)}</td>
+            <td>${esc(fmtDate(m.timestamp))}</td>
+            <td>${esc(m.location)}${m.note ? ` <span class="muted">(${esc(m.note)})</span>` : ""}</td>
+          </tr>
+        `;
+      }).join("") || `<tr><td colspan="4" class="muted">Aún no hay movimientos.</td></tr>`;
+    }
+
+    function toCSVTotals(totals){
+      const lines = ['"barcode","qty"'];
+      for(const [code, qty] of Object.entries(totals)){
+        lines.push(`"${String(code).replaceAll('"','""')}","${qty}"`);
+      }
+      return lines.join("\n");
+    }
+
+    function toCSVMoves(moves){
+      const lines = ['"barcode","location","timestamp","note"'];
+      for(const m of moves){
+        const row = [
+          m.barcode ?? "",
+          m.location ?? "",
+          m.timestamp ?? "",
+          m.note ?? ""
+        ].map(v => `"${String(v).replaceAll('"','""')}"`).join(",");
+        lines.push(row);
       }
       return lines.join("\n");
     }
@@ -193,10 +300,9 @@
       URL.revokeObjectURL(url);
     }
 
-    // ===== Main =====
+    // ===== Events =====
     startBtn.onclick = async () => {
       try{
-        // En iPhone, el audio requiere interacción del usuario: esto ayuda
         if(soundOn.checked){
           try{
             audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
@@ -211,19 +317,17 @@
           const code = (result.getText() || "").trim();
           const now = Date.now();
 
-          // anti-rebote (no repetir el mismo código en <1.2s)
+          // anti-rebote
           if(lastScan.code === code && (now - lastScan.t) < 1200) return;
           lastScan = { code, t: now };
 
           last.value = code;
-          addScan(code);
 
-          // feedback
-          beep();
-          vibrate();
-          flashOK();
+          const qty = addScan(code);
 
-          setStatus("Guardado ✅ (" + code + ")");
+          beep(); vibrate(); flashOK();
+          setStatus(`Guardado ✅ (${code}) | Total: ${qty}`);
+          render();
         });
 
         startBtn.disabled = true;
@@ -241,40 +345,101 @@
       setStatus("Cámara detenida.");
     };
 
-    exportBtn.onclick = () => {
-      const scans = loadScans();
-      if(!scans.length){
-        setStatus("No hay nada para exportar.", false);
+    totalsTableEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button");
+      if(!btn) return;
+      const codeMinus = btn.getAttribute("data-minus");
+      const codePlus  = btn.getAttribute("data-plus");
+      if(codeMinus){
+        const qty = incTotal(codeMinus, -1);
+        last.value = codeMinus;
+        setStatus(`Ajuste -1 ✅ (${codeMinus}) | Total: ${qty || 0}`);
+        render();
+      }
+      if(codePlus){
+        const qty = incTotal(codePlus, +1);
+        // también lo registramos como movimiento para auditoría
+        const moves = loadMoves();
+        moves.push({ barcode: codePlus, location: LOCATION, timestamp: new Date().toISOString(), note: "AJUSTE +1" });
+        saveMoves(moves);
+        last.value = codePlus;
+        setStatus(`Ajuste +1 ✅ (${codePlus}) | Total: ${qty}`);
+        render();
+      }
+    });
+
+    undoBtn.onclick = () => {
+      const r = undoLastMove();
+      if(!r){
+        setStatus("No hay nada para deshacer.", false);
         return;
       }
-      const csv = toCSV(scans);
-      const name = `inventario_${LOCATION.replaceAll(" ","_")}_${new Date().toISOString().slice(0,10)}.csv`;
-      downloadFile(name, csv);
-      setStatus("CSV exportado ✅");
+      last.value = r.barcode;
+      setStatus(`Deshacer ✅ (${r.barcode}) | Total: ${r.qty || 0}`);
+      render();
     };
 
-    copyBtn.onclick = async () => {
-      const scans = loadScans().slice(-50);
-      if(!scans.length){
-        setStatus("No hay nada para copiar.", false);
+    minusLastBtn.onclick = () => {
+      const r = minusLast();
+      if(!r){
+        setStatus("No hay último código para restar.", false);
         return;
       }
-      const text = scans.map(s => `${s.barcode}\t${s.location}\t${s.timestamp}`).join("\n");
+      setStatus(`Restado -1 ✅ (${r.barcode}) | Total: ${r.qty || 0}`);
+      render();
+    };
+
+    exportTotalsBtn.onclick = () => {
+      const totals = loadTotals();
+      const keys = Object.keys(totals);
+      if(!keys.length){
+        setStatus("No hay totales para exportar.", false);
+        return;
+      }
+      const csv = toCSVTotals(totals);
+      const name = `totales_${LOCATION.replaceAll(" ","_")}_${new Date().toISOString().slice(0,10)}.csv`;
+      downloadFile(name, csv);
+      setStatus("Totales exportados ✅");
+    };
+
+    exportMovesBtn.onclick = () => {
+      const moves = loadMoves();
+      if(!moves.length){
+        setStatus("No hay movimientos para exportar.", false);
+        return;
+      }
+      const csv = toCSVMoves(moves);
+      const name = `movimientos_${LOCATION.replaceAll(" ","_")}_${new Date().toISOString().slice(0,10)}.csv`;
+      downloadFile(name, csv);
+      setStatus("Movimientos exportados ✅");
+    };
+
+    copyTotalsBtn.onclick = async () => {
+      const totals = loadTotals();
+      const entries = Object.entries(totals).sort((a,b) => (b[1]-a[1]) || a[0].localeCompare(b[0]));
+      if(!entries.length){
+        setStatus("No hay totales para copiar.", false);
+        return;
+      }
+      const text = entries.map(([c,q]) => `${c}\t${q}`).join("\n");
       try{
         await navigator.clipboard.writeText(text);
-        setStatus("Copiado ✅ (últimos 50)");
+        setStatus("Totales copiados ✅");
       }catch{
-        setStatus("No pude copiar (bloqueo del navegador). Usa Exportar CSV.", false);
+        setStatus("No pude copiar. Usa Exportar CSV (Totales).", false);
       }
     };
 
     clearBtn.onclick = () => {
-      if(!confirm("¿Seguro que quieres borrar TODOS los escaneos guardados en este dispositivo?")) return;
-      saveScans([]);
+      if(!confirm("¿Seguro que quieres borrar TODO (movimientos y totales) en este dispositivo?")) return;
+      localStorage.removeItem(STORAGE_MOVES);
+      localStorage.removeItem(STORAGE_TOTALS);
+      last.value = "";
       render();
-      setStatus("Lista borrada.");
+      setStatus("Todo borrado.");
     };
 
+    // Inicial
     render();
   </script>
 </body>
