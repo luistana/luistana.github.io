@@ -1,0 +1,2 @@
+This repo is intended to be used in a business for doing Inventory using a phone by scanning the bar codes. It gives you Total Items, Quantity, and when it was scanned. Primarily, the repo is custom made for my use on my business but if it helps you please feel free to let me know how you like it and what you would add to it.
+I do not have much experience writing code so pretty much everything was made with the help of ChatGPT :) 
